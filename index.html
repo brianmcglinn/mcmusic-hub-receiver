@@ -139,7 +139,7 @@
   const castDebugLogger = cast.debug.CastDebugLogger.getInstance();
   context.addEventListener(cast.framework.system.EventType.READY, () => {
     if (!castDebugLogger.debugOverlayElement_) {
-      castDebugLogger.setEnabled(true);
+      castDebugLogger.setEnabled(false);
       castDebugLogger.showDebugLogs(true);
     }
   });
