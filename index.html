@@ -113,43 +113,13 @@
 </div>
 
 <script>
-  // ---- Config: fill in before deploying ----
-  const SUPABASE_URL = 'https://supabase.picklevision.net';
-  const SUPABASE_ANON_KEY = 'REPLACE_WITH_ANON_KEY';
-  const SCHEMA = 'mcmusic_hub';   // new schema — separate from the mcjukebox schema
-  const TABLE = 'queue_state';    // expected shape: session_id, picked_by, up_next, updated_at
-
-  // ---- Channel 2: queue context via Supabase realtime ----
-  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    db: { schema: SCHEMA }
-  });
-
-  const pickedByEl = document.getElementById('picked-by');
-  const upNextEl = document.getElementById('up-next');
-  const queueStrip = document.getElementById('queue-strip');
-
-  function renderQueue(row) {
-    if (!row) return;
-    pickedByEl.textContent = row.picked_by || '\u2014';
-    upNextEl.textContent = row.up_next || '\u2014';
-  }
-
-  async function loadInitialQueue() {
-    const { data, error } = await sb.from(TABLE).select('*').limit(1).single();
-    if (!error) renderQueue(data);
-  }
-  loadInitialQueue();
-
-  sb.channel('mcmusic-queue')
-    .on('postgres_changes', { event: '*', schema: SCHEMA, table: TABLE }, (payload) => {
-      renderQueue(payload.new);
-    })
-    .subscribe();
-
   // ---- Channel 1: audio + basic metadata via CAF ----
+  // Starts first and unconditionally. Nothing below this can prevent
+  // the Cast device from getting its "receiver is ready" signal.
   const context = cast.framework.CastReceiverContext.getInstance();
   const playerManager = context.getPlayerManager();
   const idleScreen = document.getElementById('idle-screen');
+  const queueStrip = document.getElementById('queue-strip');
 
   // NOTE: verify MEDIA_STATUS is still the current event name against
   // developers.google.com/cast/docs/web_receiver at deploy time.
@@ -164,6 +134,41 @@
   );
 
   context.start();
+
+  // ---- Channel 2: queue context via Supabase realtime (best-effort) ----
+  // Wrapped so a bad config, missing table, or unreachable CDN can never
+  // take Channel 1 down with it.
+  try {
+    const SUPABASE_URL = 'https://supabase.picklevision.net';
+    const SUPABASE_ANON_KEY = 'sb_publishable_0bzF9CvobUeXAgsrV2swW-_ldvYwq6T';
+    const SCHEMA = 'mcmusic_hub';   // new schema — separate from the mcjukebox schema
+    const TABLE = 'queue_state';    // expected shape: session_id, picked_by, up_next, updated_at
+
+    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      db: { schema: SCHEMA }
+    });
+
+    const pickedByEl = document.getElementById('picked-by');
+    const upNextEl = document.getElementById('up-next');
+
+    function renderQueue(row) {
+      if (!row) return;
+      pickedByEl.textContent = row.picked_by || '\u2014';
+      upNextEl.textContent = row.up_next || '\u2014';
+    }
+
+    sb.from(TABLE).select('*').limit(1).single()
+      .then(({ data, error }) => { if (!error) renderQueue(data); })
+      .catch((err) => console.error('McMusic Hub: initial queue fetch failed', err));
+
+    sb.channel('mcmusic-queue')
+      .on('postgres_changes', { event: '*', schema: SCHEMA, table: TABLE }, (payload) => {
+        renderQueue(payload.new);
+      })
+      .subscribe();
+  } catch (err) {
+    console.error('McMusic Hub: queue overlay disabled —', err);
+  }
 </script>
 
 </body>
