@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>McMusic Hub — Receiver</title>
+<script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #0a0714;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    overflow: hidden;
+  }
+
+  /* Channel 1: CAF built-in player handles audio session + progress bar */
+  cast-media-player {
+    --theme-hue: 270;              /* approximates #7901f5 */
+    --progress-color: rgb(77, 252, 0);  /* #4dfc00 */
+  }
+
+  #idle-screen {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #0a0714;
+    color: #efe9ff;
+    transition: opacity 0.4s ease;
+  }
+
+  #idle-screen h1 {
+    font-size: 56px;
+    font-weight: 700;
+    margin: 0;
+    letter-spacing: -1px;
+    background: linear-gradient(90deg, #7901f5, #005dff);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  #idle-screen p {
+    margin-top: 12px;
+    font-size: 20px;
+    color: #a89fc2;
+  }
+
+  #idle-screen.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* Channel 2: Supabase realtime queue context */
+  #queue-strip {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 22px 48px;
+    background: rgba(10, 7, 20, 0.82);
+    border-top: 2px solid #4dfc00;
+    color: #efe9ff;
+    font-size: 22px;
+    box-sizing: border-box;
+    transition: transform 0.3s ease;
+  }
+
+  #queue-strip.hidden {
+    transform: translateY(100%);
+  }
+
+  #queue-strip .label {
+    color: #7f77dd;
+    font-size: 14px;
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  #queue-strip .picked-by {
+    font-weight: 600;
+  }
+
+  #queue-strip .up-next-block {
+    text-align: right;
+  }
+</style>
+</head>
+<body>
+
+<cast-media-player></cast-media-player>
+
+<div id="idle-screen">
+  <h1>McMusic Hub</h1>
+  <p>Waiting for the next song&hellip;</p>
+</div>
+
+<div id="queue-strip" class="hidden">
+  <div class="picked-by-block">
+    <span class="label">Picked by</span>
+    <span class="picked-by" id="picked-by">&mdash;</span>
+  </div>
+  <div class="up-next-block">
+    <span class="label">Up next</span>
+    <span class="up-next-name" id="up-next">&mdash;</span>
+  </div>
+</div>
+
+<script>
+  // ---- Config: fill in before deploying ----
+  const SUPABASE_URL = 'https://supabase.picklevision.net';
+  const SUPABASE_ANON_KEY = 'REPLACE_WITH_ANON_KEY';
+  const SCHEMA = 'mcmusic_hub';   // new schema — separate from the mcjukebox schema
+  const TABLE = 'queue_state';    // expected shape: session_id, picked_by, up_next, updated_at
+
+  // ---- Channel 2: queue context via Supabase realtime ----
+  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    db: { schema: SCHEMA }
+  });
+
+  const pickedByEl = document.getElementById('picked-by');
+  const upNextEl = document.getElementById('up-next');
+  const queueStrip = document.getElementById('queue-strip');
+
+  function renderQueue(row) {
+    if (!row) return;
+    pickedByEl.textContent = row.picked_by || '\u2014';
+    upNextEl.textContent = row.up_next || '\u2014';
+  }
+
+  async function loadInitialQueue() {
+    const { data, error } = await sb.from(TABLE).select('*').limit(1).single();
+    if (!error) renderQueue(data);
+  }
+  loadInitialQueue();
+
+  sb.channel('mcmusic-queue')
+    .on('postgres_changes', { event: '*', schema: SCHEMA, table: TABLE }, (payload) => {
+      renderQueue(payload.new);
+    })
+    .subscribe();
+
+  // ---- Channel 1: audio + basic metadata via CAF ----
+  const context = cast.framework.CastReceiverContext.getInstance();
+  const playerManager = context.getPlayerManager();
+  const idleScreen = document.getElementById('idle-screen');
+
+  // NOTE: verify MEDIA_STATUS is still the current event name against
+  // developers.google.com/cast/docs/web_receiver at deploy time.
+  playerManager.addEventListener(
+    cast.framework.events.EventType.MEDIA_STATUS,
+    (event) => {
+      const state = event.mediaStatus && event.mediaStatus.playerState;
+      const isIdle = !state || state === 'IDLE';
+      idleScreen.classList.toggle('hidden', !isIdle);
+      queueStrip.classList.toggle('hidden', isIdle);
+    }
+  );
+
+  context.start();
+</script>
+
+</body>
+</html>
