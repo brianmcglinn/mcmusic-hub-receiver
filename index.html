@@ -135,29 +135,38 @@
   );
 
   // ---- Debug logger: on-screen overlay, no remote connection needed ----
+  // Wrapped so an unsupported/failed debug logger can never block context.start().
   // TEMPORARY for bring-up — set enabled to false once McMusic Hub is confirmed working.
-  const castDebugLogger = cast.debug.CastDebugLogger.getInstance();
-  context.addEventListener(cast.framework.system.EventType.READY, () => {
-    if (!castDebugLogger.debugOverlayElement_) {
-      castDebugLogger.setEnabled(false);
-      castDebugLogger.showDebugLogs(true);
-    }
-  });
-  castDebugLogger.loggerLevelByEvents = {
-    'cast.framework.events.category.CORE': cast.framework.LoggerLevel.INFO,
-    'cast.framework.events.EventType.MEDIA_STATUS': cast.framework.LoggerLevel.DEBUG
-  };
+  try {
+    const castDebugLogger = cast.debug.CastDebugLogger.getInstance();
+    context.addEventListener(cast.framework.system.EventType.READY, () => {
+      if (!castDebugLogger.debugOverlayElement_) {
+        castDebugLogger.setEnabled(true);
+        castDebugLogger.showDebugLogs(true);
+      }
+    });
+    castDebugLogger.loggerLevelByEvents = {
+      'cast.framework.events.category.CORE': cast.framework.LoggerLevel.INFO,
+      'cast.framework.events.EventType.MEDIA_STATUS': cast.framework.LoggerLevel.DEBUG
+    };
+  } catch (err) {
+    console.error('McMusic Hub: debug logger unavailable —', err);
+  }
 
   context.start();
 
   // ---- Channel 2: queue context via Supabase realtime (best-effort) ----
   // Wrapped so a bad config, missing table, or unreachable CDN can never
   // take Channel 1 down with it.
+  //
+  // Reads queue_members directly (ordered by position) rather than a
+  // separately-written queue_state — front of the ordered list is who's up,
+  // second is on deck. Updates instantly the moment anyone joins; doesn't
+  // depend on shairport-sync's play-event hooks firing correctly.
   try {
     const SUPABASE_URL = 'https://supabase.picklevision.net';
     const SUPABASE_ANON_KEY = 'sb_publishable_0bzF9CvobUeXAgsrV2swW-_ldvYwq6T';
-    const SCHEMA = 'mcmusic_hub';   // new schema — separate from the mcjukebox schema
-    const TABLE = 'queue_state';    // expected shape: session_id, picked_by, up_next, updated_at
+    const SCHEMA = 'mcmusic_hub';
 
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       db: { schema: SCHEMA }
@@ -166,20 +175,23 @@
     const pickedByEl = document.getElementById('picked-by');
     const upNextEl = document.getElementById('up-next');
 
-    function renderQueue(row) {
-      if (!row) return;
-      pickedByEl.textContent = row.picked_by || '\u2014';
-      upNextEl.textContent = row.up_next || '\u2014';
+    function renderQueue(members) {
+      pickedByEl.textContent = (members[0] && members[0].display_name) || '\u2014';
+      upNextEl.textContent = (members[1] && members[1].display_name) || '\u2014';
     }
 
-    sb.from(TABLE).select('*').limit(1).single()
-      .then(({ data, error }) => { if (!error) renderQueue(data); })
-      .catch((err) => console.error('McMusic Hub: initial queue fetch failed', err));
+    async function loadQueue() {
+      const { data, error } = await sb
+        .from('queue_members')
+        .select('*')
+        .order('position', { ascending: true });
+      if (!error) renderQueue(data || []);
+    }
 
-    sb.channel('mcmusic-queue')
-      .on('postgres_changes', { event: '*', schema: SCHEMA, table: TABLE }, (payload) => {
-        renderQueue(payload.new);
-      })
+    loadQueue();
+
+    sb.channel('mcmusic-queue-members-live')
+      .on('postgres_changes', { event: '*', schema: SCHEMA, table: 'queue_members' }, loadQueue)
       .subscribe();
   } catch (err) {
     console.error('McMusic Hub: queue overlay disabled —', err);
