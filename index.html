@@ -91,6 +91,48 @@
   #queue-strip .up-next-block {
     text-align: right;
   }
+
+  /* Now-playing panel: shairport-sync metadata via Channel 2 */
+  #now-playing {
+    position: absolute;
+    left: 48px;
+    bottom: 100px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 16px 20px;
+    background: rgba(10, 7, 20, 0.82);
+    border: 1px solid #2a1f42;
+    border-radius: 12px;
+    color: #efe9ff;
+    max-width: 480px;
+    transition: opacity 0.3s ease;
+  }
+
+  #now-playing.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  #now-playing img {
+    width: 72px;
+    height: 72px;
+    border-radius: 8px;
+    object-fit: cover;
+    background: #161022;
+    flex-shrink: 0;
+  }
+
+  #now-playing .track-title {
+    font-size: 20px;
+    font-weight: 600;
+  }
+
+  #now-playing .track-artist {
+    font-size: 15px;
+    color: #a89fc2;
+    margin-top: 4px;
+  }
 </style>
 </head>
 <body>
@@ -100,6 +142,14 @@
 <div id="idle-screen">
   <h1>McMusic Hub</h1>
   <p>Waiting for the next song&hellip;</p>
+</div>
+
+<div id="now-playing" class="hidden">
+  <img id="artwork" src="" alt="" />
+  <div>
+    <div class="track-title" id="track-title"></div>
+    <div class="track-artist" id="track-artist"></div>
+  </div>
 </div>
 
 <div id="queue-strip" class="hidden">
@@ -193,6 +243,38 @@
 
     sb.channel('mcmusic-queue-members-live')
       .on('postgres_changes', { event: '*', schema: SCHEMA, table: 'queue_members' }, loadQueue)
+      .subscribe();
+
+    // Now-playing metadata, written by metadata_reader.py from
+    // shairport-sync's metadata pipe. Separate table, separate concern
+    // from the queue itself, but same client/connection.
+    const nowPlayingEl = document.getElementById('now-playing');
+    const artworkEl = document.getElementById('artwork');
+    const trackTitleEl = document.getElementById('track-title');
+    const trackArtistEl = document.getElementById('track-artist');
+
+    function renderNowPlaying(row) {
+      if (!row || !row.track_title) {
+        nowPlayingEl.classList.add('hidden');
+        return;
+      }
+      trackTitleEl.textContent = row.track_title || '';
+      trackArtistEl.textContent = row.track_artist || '';
+      artworkEl.src = row.artwork_data_url || '';
+      nowPlayingEl.classList.remove('hidden');
+    }
+
+    async function loadNowPlaying() {
+      const { data, error } = await sb.from('queue_state').select('*').limit(1).single();
+      if (!error) renderNowPlaying(data);
+    }
+
+    loadNowPlaying();
+
+    sb.channel('mcmusic-now-playing-live')
+      .on('postgres_changes', { event: '*', schema: SCHEMA, table: 'queue_state' }, (payload) => {
+        renderNowPlaying(payload.new);
+      })
       .subscribe();
   } catch (err) {
     console.error('McMusic Hub: queue overlay disabled —', err);
