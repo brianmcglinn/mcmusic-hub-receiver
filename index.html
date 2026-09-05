@@ -136,13 +136,14 @@
 
   // ---- Debug logger: on-screen overlay, no remote connection needed ----
   // Wrapped so an unsupported/failed debug logger can never block context.start().
-  // TEMPORARY for bring-up — set enabled to false once McMusic Hub is confirmed working.
+  // Disabled now that both channels are confirmed working — flip back to true
+  // only if bring-up diagnostics are needed again.
   try {
     const castDebugLogger = cast.debug.CastDebugLogger.getInstance();
     context.addEventListener(cast.framework.system.EventType.READY, () => {
       if (!castDebugLogger.debugOverlayElement_) {
-        castDebugLogger.setEnabled(true);
-        castDebugLogger.showDebugLogs(true);
+        castDebugLogger.setEnabled(false);
+        castDebugLogger.showDebugLogs(false);
       }
     });
     castDebugLogger.loggerLevelByEvents = {
